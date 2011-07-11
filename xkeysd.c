@@ -3,6 +3,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
+#include <stdlib.h>
 
 #include <libconfig.h>
 
@@ -10,10 +12,12 @@
 #include <linux/uinput.h>
 #include <linux/hidraw.h>
 
+#include "input.h"
+
 #define XKEYS_VENDOR	0x5f3
 #define XKEYS_PRODUCT	0x2b1
 
-static int find_devices(int **fds)
+static int find_devices(int *fds)
 {
 	int ret = 0, num, fd;
 	char filename[14];
@@ -42,53 +46,44 @@ static int find_devices(int **fds)
 }
 
 #if 0
-version = 1;
-devices:
+device definition
 {
-	foo:
-	{
-		device = "path";
-		key0 = "KEY_A";
-		key1 = "KEY_B";
-		(...)
-		key44 = "KEY_F";
-		intdial = "REL_WHEEL";
-		extdial = "REL_HWHEEL";
-	}
-	bar:
-	{
+	method = [evdev|hidraw];		/* default evdev */
 
-	}
-	(...)
+	vendor = <id>;			\
+	product = <id>;			|
+	bus = <id>;			|---
+	serial = <id>;			/   \
+					     +----- either
+	device = <file>;		>---/
+
+	keyX = ...;
+	rel_axisX = ...;
+	abs_axisY = ...;
 }
 #endif
+
 #define XKEYS_NKEYS 46
 struct device {
 	int fd;
 	char name[64];
 	uint16_t key_mapping[XKEYS_NKEYS];
 	uint16_t axle_mapping[2]; 
+	uint16_t last_axle_value[2];
 };
 
-static int new_device_from_config(config_setting_t *setting)
+static int new_device_from_config(config_setting_t *setting, struct input_translate *priv, struct device *new)
 {
-	struct device *new = malloc(sizeof(struct device));
+	struct input_translate_type event;
 	config_setting_t *tmp;
 	char keyname[6], *value;
 	int i, index;
 
-	if (new == NULL) {
-		fprintf(stderr, "Error allocating memory for new device\n");
-		return 1;
-	}
-	memset(new, 0, sizeof(*new));
-
-	strncmp(new->name, 64, config_setting_name(setting));
+	strncmp(new->name, config_setting_name(setting), 64);
 
 	tmp = config_setting_get_member(setting, "device");
 	if (tmp == NULL) {
 		fprintf(stderr, "Every device must have a 'device' member\n");
-		free(new);
 		return 1;
 	}
 	snprintf(new->name, sizeof(new->name), config_setting_get_string(tmp));
@@ -101,22 +96,79 @@ static int new_device_from_config(config_setting_t *setting)
 		value = config_setting_get_string(tmp);
 		if (value == NULL) {
 			fprintf(stderr, "Error parsing key value for key%i\n", i);
-			free(new);
 			return 1;
 		}
-		new->key_mapping[i] = translate_input(value);
+
+		if (input_translate_string(priv, value, &event)) {
+			fprintf(stderr, "Unable to parse key %s\n", value);
+			return 1;
+		}
+		if (event.type != EV_KEY) {
+			fprintf(stderr, "Event %s is not supported yet, only KEY_ events\n", value);
+			return 1;
+		}
+		new->key_mapping[i] = event.code;
+	}
+	tmp = config_setting_get_member(setting, "idial");
+	if (tmp == NULL) {
+		fprintf(stderr, "Internal dial (idial) not set\n");
+	} else {
+		value = config_setting_get_string(tmp);
+		if (value == NULL) {
+			fprintf(stderr, "Error parsing key value for idial\n");
+			return 1;
+		}
+		if (input_translate_string(priv, value, &event)) {
+			fprintf(stderr, "Unable to parse key %s\n", value);
+			return 1;
+		}
+		if (event.type != EV_REL) {
+			fprintf(stderr, "Event %s is not supported yet for idial, only REL_ events\n", value);
+			return 1;
+		}
+		new->axle_mapping[0] = event.code;
+	}
+
+	tmp = config_setting_get_member(setting, "edial");
+	if (tmp == NULL) {
+		fprintf(stderr, "External dial (idial) not set\n");
+	} else {
+		value = config_setting_get_string(tmp);
+		if (value == NULL) {
+			fprintf(stderr, "Error parsing key value for edial\n");
+			return 1;
+		}
+		if (input_translate_string(priv, value, &event)) {
+			fprintf(stderr, "Unable to parse key %s\n", value);
+			return 1;
+		}
+		if (event.type != EV_REL) {
+			fprintf(stderr, "Event %s is not supported yet for edial, only REL_ events\n", value);
+			return 1;
+		}
+		new->axle_mapping[1] = event.code;
 	}
 
 	return 0;
 }
 
-static int read_config(void)
+static struct device devices[HIDRAW_MAX_DEVICES];
+static int device_count;
+
+static int read_config(char *filename)
 {
 	config_t config;
 	config_setting_t *root, *tmp, *devices;
-	int version, i;
+	struct input_translate *priv;
+	struct device *dev;
+	int version, i, ret;
 
-	//
+	priv = input_translate_init();
+	if (priv == NULL) {
+		fprintf(stderr, "Error initalizing input translation library\n");
+		return 1;
+	}
+
 	config_init(&config);
 	ret = config_read_file(&config, filename);
 	if (ret == CONFIG_FALSE) {
@@ -125,7 +177,6 @@ static int read_config(void)
 		return 1;
 	}
 
-	//
 	tmp = config_lookup(&config, "version");
 	if (tmp == NULL) {
 		fprintf(stderr, "Error config file version in %s (%s)\n",
@@ -134,7 +185,6 @@ static int read_config(void)
 	}
 	version = config_setting_get_int(tmp);
 
-	//
 	devices = config_lookup(&config, "devices");
 	if (devices == NULL) {
 		fprintf(stderr, "Error getting devices block in %s (%s)\n",
@@ -142,7 +192,6 @@ static int read_config(void)
 		return 1;
 	}
 
-	//
 	for (i = 0; i < HIDRAW_MAX_DEVICES; i++) {
 		tmp = config_setting_get_elem(devices, i);
 		if (tmp == NULL)
@@ -153,16 +202,19 @@ static int read_config(void)
 				config_setting_name(tmp));
 			return 1;
 		}
-		printf("Got new device %s\n", config_setting_name(tmp));
-		if (new_device_from_config(tmp))
+		if (new_device_from_config(tmp, priv, &devices[device_count]))
 			return 1;
+		device_count++;
 	}
 
-	config_cleanup(&config);
+	return 0;
 }
 
 int main(int argc, char *argv[])
 {
+	int ret;
+
+	ret = read_config("sample.conf");
 
 	return 0;
 }
