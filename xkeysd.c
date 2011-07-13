@@ -61,12 +61,18 @@ device definition
 	rel_axisX = ...;
 	abs_axisY = ...;
 }
+add to struct device:
+	- serial (for device serial name)
+	- method (evdev, hidraw)
 #endif
 
 #define XKEYS_NKEYS 46
 struct device {
 	int fd;
+	char filename[128];
 	char name[64];
+	uint16_t vendor;
+	uint16_t product;
 	uint16_t key_mapping[XKEYS_NKEYS];
 	uint16_t axle_mapping[2]; 
 	uint16_t last_axle_value[2];
@@ -79,14 +85,31 @@ static int new_device_from_config(config_setting_t *setting, struct input_transl
 	char keyname[6], *value;
 	int i, index;
 
-	strncmp(new->name, config_setting_name(setting), 64);
+	new->fd = -1;
+
+	tmp = config_setting_get_member(setting, "name");
+	if (tmp != NULL)
+		snprintf(new->name, sizeof(new->name), config_setting_get_string(tmp));
 
 	tmp = config_setting_get_member(setting, "device");
-	if (tmp == NULL) {
-		fprintf(stderr, "Every device must have a 'device' member\n");
+	if (tmp != NULL)
+		snprintf(new->filename, sizeof(new->filename), config_setting_get_string(tmp));
+
+	tmp = config_setting_get_member(setting, "vendor");
+	if (tmp != NULL) {
+		new->vendor = config_setting_get_integer(tmp);
+		tmp = config_setting_get_member(setting, "product");
+		if (tmp == NULL) {
+			fprintf(stderr, "When vendor id is specified, product id must be specified too\n");
+			return 1;
+		}
+		new->product = config_setting_get_integer(tmp);
+	}
+
+	if (strlen(new->filename) == 0 and new->vendor == 0) {
+		fprintf(stderr, "Either 'device' or vendor/product ids must be supplied");
 		return 1;
 	}
-	snprintf(new->name, sizeof(new->name), config_setting_get_string(tmp));
 
 	for (i = 0; i < XKEYS_NKEYS; i++) {
 		sprintf(keyname, "key%i", i);
@@ -172,8 +195,9 @@ static int read_config(char *filename)
 	config_init(&config);
 	ret = config_read_file(&config, filename);
 	if (ret == CONFIG_FALSE) {
-		fprintf(stderr, "Error reading config file %s (%s)\n",
-			filename, config_error_text(&config));
+		fprintf(stderr, "Error reading config file %s (%s:%i)\n",
+			filename, config_error_text(&config),
+			config_error_line(&config));
 		return 1;
 	}
 
@@ -212,9 +236,27 @@ static int read_config(char *filename)
 
 int main(int argc, char *argv[])
 {
-	int ret;
+	int ret, i;
 
 	ret = read_config("sample.conf");
+	if (ret != 0) {
+		fprintf(stderr, "Error reading the configuration file.\n");
+		return 1;
+	}
+
+	if (device_count == 0) {
+		fprintf(stderr, "No devices defined on the configuration file, exiting.\n");
+		return 1;
+	}
+
+	for (i = 0; i < device_count; i++) {
+		ret = locate_and_open(i);
+		if (ret < 0)
+			fprintf(stderr, "Error opening device \"%s\"\n", devices[i].name ? devices[i].name:"noname");
+		else if (ret == 0)
+			/* FIXME - hotplugging */
+			fprintf(stderr, "Device \"%s\" not found\n", devices[i].name ? devices[i].name:"noname");
+	}
 
 	return 0;
 }
