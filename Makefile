@@ -1,4 +1,4 @@
-CFLAGS:=-g
+CFLAGS:=-g -DUINPUT_FILE=\"/dev/uinput\"
 all: xkeysd test
 
 xkeysd: input.o xkeysd.o
