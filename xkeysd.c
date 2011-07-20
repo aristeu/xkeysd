@@ -512,16 +512,43 @@ send:
 	goto out;
 }
 
+static void help(void)
+{
+	printf("xkeysd [-c config] [-h]\n");
+	printf("\t-c <config>\tuse alternate config file\n");
+	printf("\t-h\t\thelp\n");
+}
+
 int main(int argc, char *argv[])
 {
-	int ret, i, highest;
+	int ret, i, highest, opt;
 	fd_set read;
 	char last[HID_MAX_DESCRIPTOR_SIZE];
 	struct timeval timeout;
+	const char *options = "c:h";
+	char *filename = NULL;
 
-	ret = read_config("sample.conf");
+	while ((opt = getopt(argc, argv, options)) != -1) {
+		switch (opt) {
+		case 'c':
+			filename = strdup(optarg);
+			break;
+		case 'h':
+			help();
+			return 0;
+		default:
+			fprintf(stderr, "Unknown option: %c\n", opt);
+			help();
+			return 1;
+		}
+	}
+	if (filename == NULL)
+		filename = "/etc/xkeysd.conf";
+
+	ret = read_config(filename);
 	if (ret != 0) {
-		fprintf(stderr, "Error reading the configuration file\n");
+		fprintf(stderr, "Error reading the configuration file (%s)\n",
+			filename);
 		return 1;
 	}
 
