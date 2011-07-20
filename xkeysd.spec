@@ -29,8 +29,7 @@ make UINPUT_FILE="/dev/uinput"
 
 %install
 rm -rf $RPM_BUILD_ROOT
-
-make install DESTDIR=$RPM_BUILD_ROOT SBINDIR=${_sbindir}
+make install DESTDIR=$RPM_BUILD_ROOT SBINDIR=%{_sbindir}
 
 %clean
 rm -rf $RPM_BUILD_ROOT
