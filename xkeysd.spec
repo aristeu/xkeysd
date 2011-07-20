@@ -13,8 +13,8 @@ URL:		http://internal/~aris/xkeysd/
 Source0:	http://internal/~aris/xkeysd/xkeysd-%{version}.tar.bz2
 
 BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}
-BuildRequires:	glibc-devel
-Requires:	udev >= 030-21, util-linux
+BuildRequires:	libconfig-devel
+Requires:	libconfig
 
 %description
 Helper application allowing the remapping of XKeys Jog & Shuttle Pro keys,
