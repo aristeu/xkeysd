@@ -48,7 +48,7 @@ start() {
                fi
             fi
 	    echo -n $"Starting $prog: "
-	    daemon /usr/sbin/xkeysd -c /etc/xkeysd.conf -f >/dev/null;
+	    daemon /usr/sbin/xkeysd -c /etc/xkeysd.conf -d >/dev/null;
 	    RETVAL=$?
 	    [ $RETVAL -eq 0 ] && (success; touch /var/lock/subsys/xkeysd) || failure;
 	    echo

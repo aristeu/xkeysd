@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <glob.h>
+#include <syslog.h>
 
 #include <libconfig.h>
 
@@ -55,6 +56,28 @@ static int get_ohd_bit(int num)
 	return (open_hidraw_devices[i] & (1 << num % BITS_PER_LONG));
 }
 
+int run_as_daemon;
+
+static int log_init(void)
+{
+	if (run_as_daemon)
+		openlog("xkeysd", LOG_CONS, LOG_DAEMON);
+}
+
+#define log(x...) do { \
+	if (run_as_daemon) \
+		syslog(LOG_DAEMON|LOG_NOTICE, #x); \
+	else \
+		printf(#x); \
+	} while(0)
+
+#define log_err(x...) do { \
+	if (run_as_daemon) \
+		syslog(LOG_DAEMON|LOG_ERR, #x); \
+	else \
+		fprintf(stderr, #x); \
+	} while(0)
+
 static int find_devices(int *fds)
 {
 	int ret = 0, num, fd;
@@ -65,12 +88,12 @@ static int find_devices(int *fds)
 		sprintf(filename, "/dev/hidraw%i", num);
 		fd = open(filename, O_RDWR);
 		if (fd < 0) {
-			fprintf(stderr, "Error opening %s: %s\n", filename,
+			log_err("Error opening %s: %s\n", filename,
 				strerror(errno));
 			return -1;
 		}
 		if (ioctl(fd, HIDIOCGRAWINFO, &info) < 0) {
-			perror("Error retrieving device information"); 
+			log_err("Error retrieving device information (%s)\n", strerror(errno)); 
 			return -1;
 		}
 		if (info.vendor != XKEYS_VENDOR || info.product != XKEYS_PRODUCT) {
@@ -95,12 +118,12 @@ static int grab_devices(int *ev_fds, int max)
 	for (i = 0; i < buf.gl_pathc; i++) {
 		fd = open(buf.gl_pathv[i], O_RDWR);
 		if (fd < 0) {
-			perror("Unable to open event device");
+			log_err("Unable to open event device (%s)\n", strerror(errno));
 			return -1;
 		}
 
 		if (ioctl(fd, EVIOCGID, &id)) {
-			perror("Unable to fetch information about event device");
+			log_err("Unable to fetch information about event device (%s)\n", strerror(errno));
 			return -1;
 		}
 
@@ -110,11 +133,11 @@ static int grab_devices(int *ev_fds, int max)
 		}
 
 		if (ioctl(fd, EVIOCGRAB, 1))
-			perror("Unable to grab event device");
+			log_err("Unable to grab event device (%s)\n", strerror(errno));
 		ev_fds[found++] = fd;
 
 		if (found >= max) {
-			fprintf(stderr, "Max devices reached, ignoring others\n");
+			log_err("Max devices reached, ignoring others\n");
 			return found;
 		}
 	}
@@ -188,14 +211,14 @@ static int new_device_from_config(config_setting_t *setting, struct input_transl
 		new->vendor = config_setting_get_int(tmp);
 		tmp = config_setting_get_member(setting, "product");
 		if (tmp == NULL) {
-			fprintf(stderr, "When vendor id is specified, product id must be specified too\n");
+			log_err("When vendor id is specified, product id must be specified too\n");
 			return 1;
 		}
 		new->product = config_setting_get_int(tmp);
 	}
 
 	if (strlen(new->filename) == 0 && new->vendor == 0) {
-		fprintf(stderr, "Either 'device' or vendor/product ids must be supplied");
+		log_err("Either 'device' or vendor/product ids must be supplied");
 		return 1;
 	}
 
@@ -211,7 +234,7 @@ static int new_device_from_config(config_setting_t *setting, struct input_transl
 			continue;
 		value = config_setting_get_string(tmp);
 		if (value == NULL) {
-			fprintf(stderr, "Error parsing key value for key%i\n", i);
+			log_err("Error parsing key value for key%i\n", i);
 			return 1;
 		}
 
@@ -241,7 +264,7 @@ static int new_device_from_config(config_setting_t *setting, struct input_transl
 			else {
 				cur = malloc(sizeof(*cur));
 				if (cur == NULL) {
-					fprintf(stderr, "Not enought memory\n");
+					log_err("Not enought memory\n");
 					exit(1);
 				}
 				memset(cur, 0, sizeof(*cur));
@@ -253,15 +276,15 @@ static int new_device_from_config(config_setting_t *setting, struct input_transl
 					break;
 
 				if (input_translate_string(priv, token, &event)) {
-					fprintf(stderr, "Unable to parse key %s\n", token);
+					log_err("Unable to parse key %s\n", token);
 					return 1;
 				}
 				if (event.type != EV_KEY) {
-					fprintf(stderr, "Event %s is not supported yet, only KEY_ events\n", token);
+					log_err("Event %s is not supported yet, only KEY_ events\n", token);
 					return 1;
 				}
 				if (j >= MAX_PRESSED_KEYS) {
-					fprintf(stderr, "Maximum of pressed keys reached (%i)\n", MAX_PRESSED_KEYS);
+					log_err("Maximum of pressed keys reached (%i)\n", MAX_PRESSED_KEYS);
 					return 1;
 				}
 				cur->code[j] = event.code;
@@ -271,19 +294,19 @@ static int new_device_from_config(config_setting_t *setting, struct input_transl
 	}
 	tmp = config_setting_get_member(setting, "idial");
 	if (tmp == NULL) {
-		fprintf(stderr, "Internal dial (idial) not set\n");
+		log_err("Internal dial (idial) not set\n");
 	} else {
 		value = config_setting_get_string(tmp);
 		if (value == NULL) {
-			fprintf(stderr, "Error parsing key value for idial\n");
+			log_err("Error parsing key value for idial\n");
 			return 1;
 		}
 		if (input_translate_string(priv, value, &event)) {
-			fprintf(stderr, "Unable to parse key %s\n", value);
+			log_err("Unable to parse key %s\n", value);
 			return 1;
 		}
 		if (event.type != EV_REL) {
-			fprintf(stderr, "Event %s is not supported yet for idial, only REL_ events\n", value);
+			log_err("Event %s is not supported yet for idial, only REL_ events\n", value);
 			return 1;
 		}
 		new->axle_mapping[0] = event.code;
@@ -291,19 +314,19 @@ static int new_device_from_config(config_setting_t *setting, struct input_transl
 
 	tmp = config_setting_get_member(setting, "edial");
 	if (tmp == NULL) {
-		fprintf(stderr, "External dial (idial) not set\n");
+		log_err("External dial (idial) not set\n");
 	} else {
 		value = config_setting_get_string(tmp);
 		if (value == NULL) {
-			fprintf(stderr, "Error parsing key value for edial\n");
+			log_err("Error parsing key value for edial\n");
 			return 1;
 		}
 		if (input_translate_string(priv, value, &event)) {
-			fprintf(stderr, "Unable to parse key %s\n", value);
+			log_err("Unable to parse key %s\n", value);
 			return 1;
 		}
 		if (event.type != EV_REL) {
-			fprintf(stderr, "Event %s is not supported yet for edial, only REL_ events\n", value);
+			log_err("Event %s is not supported yet for edial, only REL_ events\n", value);
 			return 1;
 		}
 		new->axle_mapping[1] = event.code;
@@ -325,14 +348,14 @@ static int read_config(char *filename)
 
 	priv = input_translate_init();
 	if (priv == NULL) {
-		fprintf(stderr, "Error initalizing input translation library\n");
+		log_err("Error initalizing input translation library\n");
 		return 1;
 	}
 
 	config_init(&config);
 	ret = config_read_file(&config, filename);
 	if (ret == CONFIG_FALSE) {
-		fprintf(stderr, "Error reading config file: %s (%s:%i)\n",
+		log_err("Error reading config file: %s (%s:%i)\n",
 			config_error_text(&config), filename,
 			config_error_line(&config));
 		return 1;
@@ -340,7 +363,7 @@ static int read_config(char *filename)
 
 	tmp = config_lookup(&config, "version");
 	if (tmp == NULL) {
-		fprintf(stderr, "Error config file version in %s (%s)\n",
+		log_err("Error config file version in %s (%s)\n",
 			filename, config_error_text(&config));
 		return 1;
 	}
@@ -348,7 +371,7 @@ static int read_config(char *filename)
 
 	devs = config_lookup(&config, "devices");
 	if (devs == NULL) {
-		fprintf(stderr, "Error getting devices block in %s (%s)\n",
+		log_err("Error getting devices block in %s (%s)\n",
 			filename, config_error_text(&config));
 		return 1;
 	}
@@ -359,7 +382,7 @@ static int read_config(char *filename)
 			break;
 
 		if (!config_setting_is_group(tmp)) {
-			fprintf(stderr, "Error in device definition for %s\n",
+			log_err("Error in device definition for %s\n",
 				config_setting_name(tmp));
 			return 1;
 		}
@@ -386,13 +409,13 @@ static int hidraw_search(int vendor, int product)
 		fd = open(filename, O_RDWR);
 		if (fd < 0) {
 			if (errno == EPERM) {
-				fprintf(stderr, "Not enough privileges to open /dev/hidraw%i\n");
+				log_err("Not enough privileges to open /dev/hidraw%i\n");
 				return -1;
 			}
 			continue;
 		}
 		if (ioctl(fd, HIDIOCGRAWINFO, &info)) {
-			fprintf(stderr, "Error retrieving device information from hidraw%i: %s\n",
+			log_err("Error retrieving device information from hidraw%i: %s\n",
 				i, strerror(errno));
 			close(fd);
 			continue;
@@ -422,7 +445,7 @@ static int uinput_init(struct device *dev)
 
 	dev->uinput = open(UINPUT_FILE, O_RDWR);
 	if (dev->uinput < 0) {
-		fprintf(stderr, "Error opening uinput device, exiting...\n");
+		log_err("Error opening uinput device, exiting...\n");
 		return -1;
 	}
 
@@ -437,17 +460,17 @@ static int uinput_init(struct device *dev)
 	udev.id.version = 1;
 
 	if (write(dev->uinput, &udev, sizeof(udev)) != sizeof(udev)) {
-		perror("Short write while setting up uinput device");
+		log_err("Short write while setting up uinput device (%s)\n", strerror(errno));
 		goto err;
 	}
 
 	if (ioctl(dev->uinput, UI_SET_EVBIT, EV_REL)) {
-		perror("Error enabling key events in uinput device");
+		log_err("Error enabling key events in uinput device (%s)\n", strerror(errno));
 		goto err;
 	}
 	for (i = 0; i < 2; i++) {
 		if (ioctl(dev->uinput, UI_SET_RELBIT, dev->axle_mapping[i])) {
-			fprintf(stderr, "Error enabling axis %s events: %s\n",
+			log_err("Error enabling axis %s events: %s\n",
 				input_translate_code(EV_REL, dev->axle_mapping[i]),
 				strerror(errno));
 			goto err;
@@ -455,7 +478,7 @@ static int uinput_init(struct device *dev)
 	}
 
 	if (ioctl(dev->uinput, UI_SET_EVBIT, EV_KEY)) {
-		perror("Error enabling key events in uinput device");
+		log_err("Error enabling key events in uinput device (%s)\n", strerror(errno));
 		goto err;
 	}
 	for (i = 0; i < XKEYS_NKEYS; i++) {
@@ -467,7 +490,7 @@ static int uinput_init(struct device *dev)
 				if (cur->code[j] == 0)
 					continue;
 				if (ioctl(dev->uinput, UI_SET_KEYBIT, cur->code[j])) {
-					fprintf(stderr, "Error enabling key %s in uinput device: %s\n",
+					log_err("Error enabling key %s in uinput device: %s\n",
 						input_translate_code(EV_KEY, cur->code[j]),
 						strerror(errno));
 					goto err;
@@ -478,23 +501,23 @@ static int uinput_init(struct device *dev)
 
 	/* in order to be seen as a mouse, we need to have REL_X, REL_Y and BTN_0 */
 	if (ioctl(dev->uinput, UI_SET_RELBIT, REL_X)) {
-		fprintf(stderr, "Error enabling axis X events: %s\n",
+		log_err("Error enabling axis X events: %s\n",
 			strerror(errno));
 		goto err;
 	}
 	if (ioctl(dev->uinput, UI_SET_RELBIT, REL_Y)) {
-		fprintf(stderr, "Error enabling axis Y events: %s\n",
+		log_err("Error enabling axis Y events: %s\n",
 			strerror(errno));
 		goto err;
 	}
 	if (ioctl(dev->uinput, UI_SET_KEYBIT, BTN_0)) {
-		fprintf(stderr, "Error enabling key BTN_0 in uinput device\n",
+		log_err("Error enabling key BTN_0 in uinput device\n",
 			strerror(errno));
 		goto err;
 	}
 
 	if (ioctl(dev->uinput, UI_DEV_CREATE)) {
-		perror("Error creating uinput device");
+		log_err("Error creating uinput device (%s)\n", strerror(errno));
 		goto err;
 	}
 
@@ -528,7 +551,7 @@ static int _write_input_event(struct device *dev, uint16_t type, uint16_t code, 
 	ev.code = code;
 	ev.value = value;
 	if (write(dev->uinput, &ev, sizeof(ev)) < 0) {
-		perror("Error writing event to uinput device");
+		log_err("Error writing event to uinput device (%s)\n", strerror(errno));
 		return 1;
 	}
 	return 0;
@@ -624,7 +647,7 @@ static int device_input(struct device *dev, char *last)
 
 	size = read(dev->fd, report, sizeof(report));
 	if (size < 0) {
-		perror("Error reading from hidraw device");
+		log_err("Error reading from hidraw device (%s)\n", strerror(errno));
 		return 1;
 	}
 
@@ -636,7 +659,7 @@ static int device_input(struct device *dev, char *last)
 		goto out;
 
 	if (report[1] != 2) {
-		fprintf(stderr, "error\n");
+		log_err("error\n");
 		exit(1);
 	}
 	if (report[SHUTTLE] != last[SHUTTLE]) {
@@ -679,8 +702,9 @@ send:
 
 static void help(void)
 {
-	printf("xkeysd [-c config] [-h]\n");
+	printf("xkeysd [-c config] [-d] [-h]\n");
 	printf("\t-c <config>\tuse alternate config file\n");
+	printf("\t-d\t\tbecome a daemon and detach from the controlling terminal\n");
 	printf("\t-h\t\thelp\n");
 }
 
@@ -688,12 +712,12 @@ static void help(void)
 #define EV_FDS_SIZE 10
 int main(int argc, char *argv[])
 {
-	int ret, i, highest, opt;
+	int ret, i, highest, opt, d = 0;
 	fd_set read;
 	char last[HID_MAX_DESCRIPTOR_SIZE];
 	int ev_fds[EV_FDS_SIZE];
 	struct timeval timeout;
-	const char *options = "c:h";
+	const char *options = "c:dh";
 	char *filename = NULL;
 
 	while ((opt = getopt(argc, argv, options)) != -1) {
@@ -701,11 +725,14 @@ int main(int argc, char *argv[])
 		case 'c':
 			filename = strdup(optarg);
 			break;
+		case 'd':
+			d = 1;
+			break;
 		case 'h':
 			help();
 			return 0;
 		default:
-			fprintf(stderr, "Unknown option: %c\n", opt);
+			log_err("Unknown option: %c\n", opt);
 			help();
 			return 1;
 		}
@@ -713,34 +740,41 @@ int main(int argc, char *argv[])
 	if (filename == NULL)
 		filename = "/etc/xkeysd.conf";
 
+	if (d) {
+		if (daemon(0, 0) == -1) {
+			log_err("Error forking process (%s)\n", strerror(errno));
+			return 1;
+		}
+	}
+
 	ret = read_config(filename);
 	if (ret != 0) {
-		fprintf(stderr, "Error reading the configuration file (%s)\n",
+		log_err("Error reading the configuration file (%s)\n",
 			filename);
 		return 1;
 	}
 
 	if (device_count == 0) {
-		fprintf(stderr, "No devices defined on the configuration file, exiting.\n");
+		log_err("No devices defined on the configuration file, exiting.\n");
 		return 1;
 	}
 
 	if (grab_devices(ev_fds, EV_FDS_SIZE) < 0) {
-		fprintf(stderr, "Unable to grab devices, exiting\n");
+		log_err("Unable to grab devices, exiting\n");
 		return 1;
 	}
 
 	for (i = 0; i < device_count; i++) {
 		locate_and_open(&devices[i]);
 		if (devices[i].fd < 0) {
-			fprintf(stderr, "Error opening/finding device \"%s\": %s\n",
+			log_err("Error opening/finding device \"%s\": %s\n",
 				strlen(devices[i].name) ? devices[i].name:"noname",
 				strerror(errno));
 			if (errno == EPERM)
 				return 1;
 		}
 		else if (uinput_init(&devices[i])) {
-			fprintf(stderr, "Error creating uinput device for device \"%s\", not using device\n",
+			log_err("Error creating uinput device for device \"%s\", not using device\n",
 				strlen(devices[i].name) ? devices[i].name:"noname",
 				strerror(errno));
 			close(devices[i].fd);
@@ -757,7 +791,7 @@ int main(int argc, char *argv[])
 		if (ret == 0)
 			continue;
 		if (ret < 0) {
-			perror("Error waiting for file descriptors to become available");
+			log_err("Error waiting for file descriptors to become available (%s)\n", strerror(errno));
 			return 1;
 		}
 		for (i = 0; i < device_count; i++) {
