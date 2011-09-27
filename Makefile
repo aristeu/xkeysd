@@ -1,4 +1,4 @@
-VERSION:=0.2
+VERSION:=1.0
 DEBUG:=
 CFLAGS:=$(DEBUG) -DUINPUT_FILE=\"/dev/uinput\"
 SYSCONFDIR:=etc
@@ -17,8 +17,6 @@ test: input.o test.o
 install: xkeysd
 	mkdir -p $(DESTDIR)/$(SBINDIR)
 	cp xkeysd $(DESTDIR)/$(SBINDIR)
-	mkdir -p $(docdir)/xkeys-$(VERSION)/
-	cp AUTHORS LICENSE sample.conf $(docdir)/xkeys-$(VERSION)/
 archive:
 	git archive --format=tar --prefix=xkeysd-$(VERSION)/ v$(VERSION) | bzip2 >xkeysd-$(VERSION).tar.bz2 
 clean:
