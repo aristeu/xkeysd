@@ -103,6 +103,13 @@ add to struct device:
 	- method (evdev, hidraw)
 #endif
 
+#define MAX_PRESSED_KEYS	10
+struct key_map;
+struct key_map {
+	uint16_t code[MAX_PRESSED_KEYS];
+	struct key_map *next;
+};
+
 #define XKEYS_NKEYS 46
 struct device {
 	int fd;
@@ -111,7 +118,7 @@ struct device {
 	char name[64];
 	uint16_t vendor;
 	uint16_t product;
-	uint16_t key_mapping[XKEYS_NKEYS];
+	struct key_map key_mapping[XKEYS_NKEYS];
 	uint16_t axle_mapping[2]; 
 	uint16_t last_axle_value[2];
 };
@@ -152,6 +159,11 @@ static int new_device_from_config(config_setting_t *setting, struct input_transl
 	}
 
 	for (i = 0; i < XKEYS_NKEYS; i++) {
+		const char *delim1 = ";", *delim2 = "+";
+		char *tmp1, *tmp2, *saved1, *saved2, *token;
+		int j;
+		struct key_map *prev = NULL, *cur;
+
 		sprintf(keyname, "key%i", i);
 		tmp = config_setting_get_member(setting, keyname);
 		if (tmp == NULL)
@@ -162,15 +174,59 @@ static int new_device_from_config(config_setting_t *setting, struct input_transl
 			return 1;
 		}
 
-		if (input_translate_string(priv, value, &event)) {
-			fprintf(stderr, "Unable to parse key %s\n", value);
-			return 1;
+		/*
+		 * key config format works like this:
+		 * key12 = KEY_LEFTALT+KEY_T;KEY_LEFTCTRL+KEY_LEFTALT+KEY_DELETE;KEY_A
+		 * will generate alt+t, ctrl+alt+del, a
+		 * everything in one block (delimited by ';') will be pressed then
+		 * released at the same time. this means that each ";" represents a
+		 * "release all keys". This means that:
+		 *	key12 = KEY_LEFTCTRL;KEY_LEFTALT;KEY_DELETE
+		 * is different from
+		 * 	key12 = KEY_LEFTCTRL+KEY_LEFTALT+KEY_DELETE
+		 * in the sense that the former will press and release each of the
+		 * keys separately while the last will press all of them then release
+		 * all of them.
+		 *
+		 * The limit of keys pressed is controlled by MAX_KEYS_PRESSED
+		 */
+		for (tmp1 = value; ; tmp1 = NULL) {
+			token = strtok_r(tmp1, delim1, &saved1);
+			if (token == NULL)
+				break;
+
+			if (prev == NULL)
+				cur = &new->key_mapping[i];
+			else {
+				cur = malloc(sizeof(*cur));
+				if (cur == NULL) {
+					fprintf(stderr, "Not enought memory\n");
+					exit(1);
+				}
+				memset(cur, 0, sizeof(*cur));
+				prev->next = cur;
+			}
+			for (j = 0, tmp2 = token; ; tmp2 = NULL, j++) {
+				token = strtok_r(tmp2, delim2, &saved2);
+				if (token == NULL)
+					break;
+
+				if (input_translate_string(priv, token, &event)) {
+					fprintf(stderr, "Unable to parse key %s\n", token);
+					return 1;
+				}
+				if (event.type != EV_KEY) {
+					fprintf(stderr, "Event %s is not supported yet, only KEY_ events\n", token);
+					return 1;
+				}
+				if (j >= MAX_PRESSED_KEYS) {
+					fprintf(stderr, "Maximum of pressed keys reached (%i)\n", MAX_PRESSED_KEYS);
+					return 1;
+				}
+				cur->code[j] = event.code;
+			}
+			prev = cur; 
 		}
-		if (event.type != EV_KEY) {
-			fprintf(stderr, "Event %s is not supported yet, only KEY_ events\n", value);
-			return 1;
-		}
-		new->key_mapping[i] = event.code;
 	}
 	tmp = config_setting_get_member(setting, "idial");
 	if (tmp == NULL) {
@@ -362,13 +418,20 @@ static int uinput_init(struct device *dev)
 		goto err;
 	}
 	for (i = 0; i < XKEYS_NKEYS; i++) {
-		if (dev->key_mapping[i] == 0)
-			continue;
-		if (ioctl(dev->uinput, UI_SET_KEYBIT, dev->key_mapping[i])) {
-			fprintf(stderr, "Error enabling key %s in uinput device: %s\n",
-				input_translate_code(EV_KEY, dev->key_mapping[i]),
-				strerror(errno));
-			goto err;
+		int j;
+		struct key_map *cur;
+
+		for (cur = &dev->key_mapping[i]; cur; cur = cur->next) {
+			for (j = 0; j < MAX_PRESSED_KEYS; j++) {
+				if (cur->code[j] == 0)
+					continue;
+				if (ioctl(dev->uinput, UI_SET_KEYBIT, cur->code[j])) {
+					fprintf(stderr, "Error enabling key %s in uinput device: %s\n",
+						input_translate_code(EV_KEY, cur->code[j]),
+						strerror(errno));
+					goto err;
+				}
+			}
 		}
 	}
 
@@ -415,7 +478,7 @@ static int select_init(fd_set *set, struct device *devices, int count)
 	return highest;
 }
 
-static int write_input_event(struct device *dev, uint16_t type, uint16_t code, int32_t value)
+static int _write_input_event(struct device *dev, uint16_t type, uint16_t code, int32_t value)
 {
 	struct input_event ev;
 
@@ -427,12 +490,58 @@ static int write_input_event(struct device *dev, uint16_t type, uint16_t code, i
 		perror("Error writing event to uinput device");
 		return 1;
 	}
-	ev.type = EV_SYN;
-	ev.code = SYN_REPORT;
-	ev.value = 1;
-	if (write(dev->uinput, &ev, sizeof(ev)) < 0) {
-		perror("Error writing event to uinput device");
+	return 0;
+}
+
+static int write_input_event(struct device *dev, uint16_t type, uint16_t code, int32_t value)
+{
+	if (_write_input_event(dev, type, code, value))
 		return 1;
+
+	return _write_input_event(dev, EV_SYN, SYN_REPORT, 1);
+}
+
+static int run_macro_map(struct key_map *cur, int value, struct device *dev, uint16_t type)
+{
+	int j, code;
+
+	for (j = 0; j < MAX_PRESSED_KEYS; j++) {
+		code = cur->code[j];
+		if (code == 0)
+			break;
+		if (_write_input_event(dev, type, code, value)) {
+			return 1;
+		}
+	}
+	return _write_input_event(dev, EV_SYN, SYN_REPORT, 1);
+}
+
+static int run_macro(struct key_map *map, int val, struct device *dev, uint16_t type)
+{
+	struct key_map *cur;
+	int j, code, value = val? 1:0, multiple = 0;
+
+	for (cur = map; cur; cur = cur->next) {
+		if (cur->next != NULL || multiple) {
+			/* if there're multiple blocks, we don't support
+			 * press/release */
+			multiple = 1;
+
+			/*
+			 * since we already released the keys previously,
+			 * there's no need to generate key release events
+			 */
+			if (value == 0)
+				break;
+		}
+
+		if (run_macro_map(cur, value, dev, type))
+			return 1;
+
+		if (multiple)
+			/* multiple blocks, issue key release right now */
+			if (run_macro_map(cur, 0, dev, type))
+				return 1;
 	}
 	return 0;
 }
@@ -509,15 +618,13 @@ static int device_input(struct device *dev, char *last)
 		for (i = 0; i < XKEYS_NKEYS; i++) {
 			byte = xkeys_key_bits[i].byte;
 			bit = 1 << xkeys_key_bits[i].bit;
-			if ((lptr[byte] & bit) && (rptr[byte] & bit))
+			if ((lptr[byte] & bit) == (rptr[byte] & bit))
 				/* key didn't change */
 				continue;
-			code = dev->key_mapping[i];
-			value = (rptr[byte] & bit)? 1:0;
-			if (write_input_event(dev, type, code, value)) {
-				ret = 1;
+			ret = run_macro(&dev->key_mapping[i],
+					(rptr[byte] & bit), dev, type);
+			if (ret)
 				goto out;
-			}
 		}
 	}
 
