@@ -1,0 +1,106 @@
+#!/bin/bash
+#
+#	/etc/rc.d/init.d/xkeysd
+#
+# Starts xkeysd
+#
+# chkconfig: - 95 5
+# description: allow mapping of keys and macros of XKeys Jog and Shuttle device
+# processname: xkeysd
+
+# Source function library.
+. /etc/init.d/functions
+
+test -x /usr/sbin/xkeysd || exit 0
+
+RETVAL=0
+
+#
+#	See how we were called.
+#
+
+prog="xkeysd"
+
+start() {
+	# Check if there's already a configuration present
+	if [ ! -f /etc/xkeysd.conf ]; then
+	    echo "xkeysd configuration file not present yet";
+	    return 0;
+	fi
+	# Check if xkeysd is already running
+	if [ ! -f /var/lock/subsys/xkeysd ]; then
+	    if [ -z "$(lsmod | grep uinput)" ]; then
+	       echo -n $"Loading uinput module: "
+	       modprobe uinput;
+	       RETVAL=$?
+	       [ $RETVAL -eq 0 ] && success || (failure; return $RETVAL);
+	       echo;
+	       for count in $(seq 1 3); do
+	          if [ -e /dev/uinput ]; then
+	             break;
+	          fi
+                  sleep 1;
+               done
+	       if [ ! -e /dev/uinput ]; then
+	          logger -p daemon.err -t xkeysd "/dev/uinput not available";
+	          failure;
+	          return 1;
+               fi
+            fi
+	    echo -n $"Starting $prog: "
+	    daemon /usr/sbin/xkeysd -c /etc/xkeysd.conf -f >/dev/null;
+	    RETVAL=$?
+	    [ $RETVAL -eq 0 ] && (success; touch /var/lock/subsys/xkeysd) || failure;
+	    echo
+	fi
+	return $RETVAL
+}
+
+stop() {
+	echo -n $"Stopping $prog: "
+	killproc /usr/sbin/xkeysd
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/xkeysd
+	echo
+        return $RETVAL
+}
+
+
+restart() {
+	stop
+	start
+}
+
+reload() {
+	restart
+}
+
+status_at() {
+ 	status /usr/sbin/xkeysd
+}
+
+case "$1" in
+start)
+	start
+	;;
+stop)
+	stop
+	;;
+reload|restart)
+	restart
+	;;
+condrestart)
+	if [ -f /var/lock/subsys/xkeysd ]; then
+	    restart
+	fi
+	;;
+status)
+	status_at
+	;;
+*)
+	echo $"Usage: $0 {start|stop|restart|condrestart|status}"
+	exit 1
+esac
+
+exit $?
+exit $RETVAL
