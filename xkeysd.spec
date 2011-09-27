@@ -3,22 +3,22 @@
 %define _binary_filedigest_algorithm 0
 
 Name:		xkeysd
-Version:	0.2
+Version:	1.0
 Release:	1
-Summary:	Remapping helper for XKeys Jog & Shuttle Pro
+Summary:	Userspace mapper for XKeys Jog and Shuttle Pro
 
 Group:		User Interface/X Hardware Support
 License:	GPL
-URL:		http://internal/~aris/xkeysd/
-Source0:	http://internal/~aris/xkeysd/xkeysd-%{version}.tar.bz2
+URL:		https://github.com/aristeu/xkeysd
+Source0:	https://github.com/aristeu/xkeysd/zipball/v1.0
 
 BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}
-BuildRequires:	libconfig-devel
-Requires:	libconfig
+BuildRequires:	glibc-devel
+Requires:	udev >= 030-21, util-linux
 
 %description
-Helper application allowing the remapping of XKeys Jog & Shuttle Pro keys,
-shuttle and jog knob.
+Userspace daemon to map XKeys Jog and Shuttle Pro keys and dials to events and
+macros
 
 %prep
 %setup -q
@@ -29,21 +29,37 @@ make UINPUT_FILE="/dev/uinput"
 
 %install
 rm -rf $RPM_BUILD_ROOT
-make install DESTDIR=$RPM_BUILD_ROOT SBINDIR=%{_sbindir}
+
+make DESTDIR=$RPM_BUILD_ROOT bindir=%{_sbindir} install;
+mkdir -p $RPM_BUILD_ROOT/etc/rc.d/init.d/
+cp xkeysd-initrd $RPM_BUILD_ROOT/etc/rc.d/init.d/xkeysd
 
 %clean
 rm -rf $RPM_BUILD_ROOT
 
+%post
+if [ $1 = 1 ]; then
+	/sbin/chkconfig --add %{name}
+fi
+
+%preun
+if [ $1 = 0 ]; then
+	/sbin/service %{name} stop > /dev/null 2>&1
+	/sbin/chkconfig --del %{name}
+fi
+
+%postun
+if [ $1 -ge 1 ]; then
+	/sbin/service %{name} condrestart >/dev/null 2>&1
+fi
+
 %files
 %defattr(-,root,root,-)
+%doc AUTHORS LICENSE sample.conf
 %{_sbindir}/xkeysd
-%{_sysconfdir}/xkeysd.conf
+%{_sysconfdir}/rc.d/init.d/xkeysd
 
 %changelog
-* Wed Jul 20 2011 Aristeu Rozanski <aris@redhat.com> 0.2-1
-- Improved packaging
-- Default configuration file is now on /etc/xkeysd.conf
-
-* Tue Jul 19 2011 Aristeu Rozanski <aris@redhat.com> 0.1-1
-- First test release
+* Tue Sep 27 2011 Aristeu Rozanski <aris@redhat.com> 1.0-1
+- version 1.0 packaged
 
