@@ -22,6 +22,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <glob.h>
 
 #include <libconfig.h>
 
@@ -80,6 +81,46 @@ static int find_devices(int *fds)
 		fds[ret++] = fd;
 	}
 	return ret;
+}
+
+static int grab_devices(int *ev_fds, int max)
+{
+	glob_t buf; 
+	struct input_id id;
+	int i, fd, found = 0;
+
+	if (glob("/dev/input/event*", 0, NULL, &buf))
+		return -1;
+
+	for (i = 0; i < buf.gl_pathc; i++) {
+		fd = open(buf.gl_pathv[i], O_RDWR);
+		if (fd < 0) {
+			perror("Unable to open event device");
+			return -1;
+		}
+
+		if (ioctl(fd, EVIOCGID, &id)) {
+			perror("Unable to fetch information about event device");
+			return -1;
+		}
+
+		if (id.vendor != XKEYS_VENDOR || id.product != XKEYS_PRODUCT || id.bustype == BUS_VIRTUAL) {
+			close(fd);
+			continue;
+		}
+
+		if (ioctl(fd, EVIOCGRAB, 1))
+			perror("Unable to grab event device");
+		ev_fds[found++] = fd;
+
+		if (found >= max) {
+			fprintf(stderr, "Max devices reached, ignoring others\n");
+			return found;
+		}
+	}
+	globfree(&buf);
+
+	return found;
 }
 
 #if 0
@@ -643,11 +684,14 @@ static void help(void)
 	printf("\t-h\t\thelp\n");
 }
 
+/* max number of event devices grabbed */
+#define EV_FDS_SIZE 10
 int main(int argc, char *argv[])
 {
 	int ret, i, highest, opt;
 	fd_set read;
 	char last[HID_MAX_DESCRIPTOR_SIZE];
+	int ev_fds[EV_FDS_SIZE];
 	struct timeval timeout;
 	const char *options = "c:h";
 	char *filename = NULL;
@@ -678,6 +722,11 @@ int main(int argc, char *argv[])
 
 	if (device_count == 0) {
 		fprintf(stderr, "No devices defined on the configuration file, exiting.\n");
+		return 1;
+	}
+
+	if (grab_devices(ev_fds, EV_FDS_SIZE) < 0) {
+		fprintf(stderr, "Unable to grab devices, exiting\n");
 		return 1;
 	}
 
