@@ -23,8 +23,6 @@
 #include <errno.h>
 #include <search.h>
 
-#include <linux/input.h>
-
 #include "input.h"
 
 #define HASH_SIZE 1024

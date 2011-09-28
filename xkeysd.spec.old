@@ -1,3 +1,7 @@
+# this is for newer machines so it'll generate compatible (S)RPMs
+%define _source_filedigest_algorithm 0
+%define _binary_filedigest_algorithm 0
+
 Name:		xkeysd
 Version:	1.0
 Release:	1%{?dist}
@@ -21,7 +25,7 @@ macros
 
 %build
 export CFLAGS="$RPM_OPT_FLAGS"
-make UINPUT_FILE="/dev/uinput"
+make UINPUT_FILE="/dev/uinput" USE_LOCAL_INPUT_H=1
 
 %install
 rm -rf $RPM_BUILD_ROOT

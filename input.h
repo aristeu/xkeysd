@@ -19,6 +19,12 @@
 #define INPUT_H
 #include <stdint.h>
 
+#if USE_LOCAL_INPUT_H == 1
+#include "linux-input.h"
+#else
+#include <linux/input.h>
+#endif 
+
 struct input_translate_type {
 	unsigned long code;
 	unsigned long type;

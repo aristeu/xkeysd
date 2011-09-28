@@ -40,6 +40,10 @@
 #error Please define UINPUT_FILE in Makefile
 #endif
 
+#ifndef BUS_VIRTUAL
+#define BUS_VIRTUAL	0x06
+#endif
+
 #define BITS_PER_LONG (sizeof(unsigned long) * 8)
 static unsigned long open_hidraw_devices[(HIDRAW_MAX_DEVICES/BITS_PER_LONG) + 1];
 static void set_ohd_bit(int num)
