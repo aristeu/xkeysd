@@ -614,9 +614,9 @@ static int run_macro(struct key_map *map, int val, struct device *dev, uint16_t 
 	return 0;
 }
 
-#define SHUTTLE	2
-#define JOG	3
-#define KEYS	4
+#define SHUTTLE	1
+#define JOG	2
+#define KEYS	3
 
 /*
  *  0   7  14  18  22  26  30  37  44
@@ -647,22 +647,28 @@ static int device_input(struct device *dev, char *last)
 	int ret = 0, i, size;
 	uint16_t type, code;
 	int32_t value;
-	char report[HID_MAX_DESCRIPTOR_SIZE], *rptr, *lptr;
+	char r[HID_MAX_DESCRIPTOR_SIZE], *report, *rptr, *lptr;
 
-	size = read(dev->fd, report, sizeof(report));
+	size = read(dev->fd, r, sizeof(r));
 	if (size < 0) {
 		log_err("Error reading from hidraw device (%s)\n", strerror(errno));
 		return 1;
 	}
 
+	/* this is because of 5a38f2c7c4dd53d5be097930902c108e362584a3 */
+	if (r[0] != 2)
+		report = &r[1];
+	else
+		report = r;
+
 	if (!memcmp(last, report, size))
 		return 0;
 
-	if (last[1] != 2)
+	if (last[0] != 2)
 		/* first run, ignore */
 		goto out;
 
-	if (report[1] != 2) {
+	if (report[0] != 2) {
 		log_err("error\n");
 		exit(1);
 	}
