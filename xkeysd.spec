@@ -28,7 +28,7 @@ rm -rf $RPM_BUILD_ROOT
 
 make DESTDIR=$RPM_BUILD_ROOT SBINDIR=usr/sbin install;
 mkdir -p $RPM_BUILD_ROOT/etc/rc.d/init.d/
-cp xkeysd.initrd $RPM_BUILD_ROOT/etc/rc.d/init.d/xkeysd
+install -m 0755 xkeysd.initrd $RPM_BUILD_ROOT/etc/rc.d/init.d/xkeysd
 
 %clean
 rm -rf $RPM_BUILD_ROOT
